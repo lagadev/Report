@@ -3,30 +3,26 @@ from pydantic import BaseModel, Field
 from typing import Optional
 import uvicorn
 
-from api.fb_report import FacebookReporter
+from api.report import InstagramReporter
 
 app = FastAPI(
-    title="Facebook Report API",
-    description="Facebook Help Center reporting automation API",
+    title="Instagram Report API",
+    description="API for Instagram account reporting via help center",
     version="1.0.0"
 )
 
 
-class FacebookReportRequest(BaseModel):
-    target_profile_url: str = Field(..., description="Full URL of the profile to report")
-    imposter_full_name: str = Field(..., description="Full name on the impostor profile")
-    your_full_name: str = Field(..., description="Your full name (reporter)")
-    your_email: str = Field(..., description="Your contact email")
-    imposter_email_or_phone: Optional[str] = Field(None, description="Email or phone on impostor profile")
-    additional_info: Optional[str] = Field(None, description="Additional context")
-    use_proxy: bool = Field(False, description="Use proxy")
-    proxy_protocol: Optional[str] = Field(None, description="socks4 or socks5")
-    proxy_list: Optional[list[str]] = Field(None, description="List of proxy addresses")
+class ReportRequest(BaseModel):
+    username: str = Field(..., description="Target Instagram username to report")
+    account_name: str = Field(..., description="Display name / account name")
+    use_proxy: bool = Field(False, description="Whether to use proxy")
+    proxy_protocol: Optional[str] = Field(None, description="Proxy protocol: socks4 or socks5")
+    proxy_file: Optional[str] = Field(None, description="Path to proxy list file (on server)")
 
 
 class ReportResponse(BaseModel):
     success: bool
-    target_url: str
+    username: str
     reports_sent: int
     message: str
 
@@ -34,81 +30,65 @@ class ReportResponse(BaseModel):
 @app.get("/")
 def root():
     return {
-        "service": "Facebook Report API",
+        "service": "Instagram Report API",
         "status": "running",
         "endpoints": {
-            "/report/impersonation": "POST - Report an impersonating profile",
+            "/report": "POST - Send a single report",
             "/report/burst": "POST - Send multiple reports (burst mode)",
-            "/health": "GET - Health check"
+            "/report/status": "GET - Check report status"
         },
         "docs": "/docs"
     }
 
 
-@app.post("/report/impersonation", response_model=ReportResponse)
-def report_impersonation(req: FacebookReportRequest):
+@app.post("/report", response_model=ReportResponse)
+def send_report(req: ReportRequest):
     """
-    Report a single impersonating profile to Facebook Help Center.
-    Uses the impersonation report form (ID: 295309487309948).
+    Send a single report to Instagram help center for a target username.
     """
-    reporter = FacebookReporter(
-        target_profile_url=req.target_profile_url,
-        imposter_full_name=req.imposter_full_name,
-        your_full_name=req.your_full_name,
-        your_email=req.your_email,
-        imposter_email_or_phone=req.imposter_email_or_phone,
-        additional_info=req.additional_info,
+    reporter = InstagramReporter(
+        username=req.username,
+        account_name=req.account_name,
         use_proxy=req.use_proxy,
         proxy_protocol=req.proxy_protocol,
-        proxy_list=req.proxy_list
+        proxy_file=req.proxy_file
     )
     
     success, message, count = reporter.report_once()
     
     return ReportResponse(
         success=success,
-        target_url=req.target_profile_url,
+        username=req.username,
         reports_sent=count,
         message=message
     )
 
 
 @app.post("/report/burst", response_model=ReportResponse)
-def report_burst(
-    target_profile_url: str = Query(..., description="Full URL of the profile to report"),
-    imposter_full_name: str = Query(..., description="Full name on the impostor profile"),
-    your_full_name: str = Query(..., description="Your full name"),
-    your_email: str = Query(..., description="Your contact email"),
-    imposter_email_or_phone: Optional[str] = Query(None),
-    additional_info: Optional[str] = Query(None),
-    count: int = Query(5, ge=1, le=30, description="Number of reports to send"),
+def send_burst_report(
+    username: str = Query(..., description="Target Instagram username"),
+    account_name: str = Query(..., description="Account display name"),
+    count: int = Query(10, ge=1, le=100, description="Number of reports to send"),
     use_proxy: bool = Query(False),
     proxy_protocol: Optional[str] = Query(None),
-    proxy_list: Optional[str] = Query(None, description="Comma-separated proxy list")
+    proxy_file: Optional[str] = Query(None)
 ):
     """
-    Send multiple impersonation reports in burst mode.
-    Max 30 reports per burst to avoid rate limiting.
+    Send multiple reports in burst mode.
     """
-    proxy_arr = proxy_list.split(",") if proxy_list else None
-    
-    reporter = FacebookReporter(
-        target_profile_url=target_profile_url,
-        imposter_full_name=imposter_full_name,
-        your_full_name=your_full_name,
-        your_email=your_email,
-        imposter_email_or_phone=imposter_email_or_phone,
-        additional_info=additional_info,
+    reporter = InstagramReporter(
+        username=username,
+        account_name=account_name,
         use_proxy=use_proxy,
         proxy_protocol=proxy_protocol,
-        proxy_list=proxy_arr
+        proxy_file=proxy_file
     )
     
     success, message, sent_count = reporter.report_burst(count)
     
     return ReportResponse(
         success=success,
-        target_url=target_profile_url,
+        username=username,
         reports_sent=sent_count,
         message=message
     )
@@ -116,9 +96,9 @@ def report_burst(
 
 @app.get("/health")
 def health_check():
-    from datetime import datetime
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+    return {"status": "ok", "timestamp": __import__("datetime").datetime.now().isoformat()}
 
 
+# For local development
 if __name__ == "__main__":
     uvicorn.run("api.index:app", host="0.0.0.0", port=8000, reload=True)
